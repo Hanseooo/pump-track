@@ -1,66 +1,80 @@
-import Image from "next/image";
-import styles from "./page.module.css";
+'use client';
 
-export default function Home() {
+import { useState, useEffect, useCallback } from 'react';
+import { MoistureGauge } from '@/components/moisture-gauge';
+import { SimulatorControls } from '@/components/simulator-controls';
+import { PumpCard } from '@/components/pump-card';
+import { LatestReading } from '@/lib/types';
+import { toast } from 'sonner';
+
+export default function DashboardPage() {
+  const [data, setData] = useState<LatestReading | null>(null);
+  const [settings, setSettings] = useState<{ threshold: number } | null>(null);
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [latestRes, settingsRes] = await Promise.all([
+        fetch('/api/latest'),
+        fetch('/api/settings'),
+      ]);
+
+      if (latestRes.ok && settingsRes.ok) {
+        const latest = await latestRes.json();
+        const sett = await settingsRes.json();
+        setData(latest);
+        setSettings(sett);
+      }
+    } catch (err) {
+      console.error('Failed to fetch dashboard data:', err);
+    }
+  }, []);
+
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setTimeout(() => fetchData(), 0);
+    const interval = setInterval(fetchData, 30000);
+    const nowInterval = setInterval(() => setNow(Date.now()), 60000);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+      clearInterval(nowInterval);
+    };
+  }, [fetchData]);
+
+  const lastSeenMinutes = data?.ts ? (now - data.ts) / 60000 : null;
+
   return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <main className="container mx-auto px-4 py-8 max-w-4xl">
+      <h1 className="text-3xl font-bold mb-8">Irrigation Dashboard</h1>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+        <MoistureGauge
+          moisture={data?.moisture ?? null}
+          threshold={settings?.threshold ?? 40}
+          lastSeenMinutes={lastSeenMinutes}
         />
-        <div className={styles.intro}>
-          <h1>To get started, edit the page.tsx file.</h1>
-          <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+
+        <div className="flex flex-col justify-center space-y-4">
+          <PumpCard
+            status={data?.pumpStatus || 'idle'}
+            lastPump={data?.lastPump || null}
+            hasReading={data?.moisture !== null}
+            onTrigger={async () => {
+              const res = await fetch('/api/pump', { method: 'POST' });
+              if (res.ok) {
+                toast.success('Pump triggered');
+                fetchData();
+              } else {
+                const err = await res.json();
+                toast.error(err.error || 'Failed to trigger pump');
+              }
+            }}
+          />
         </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+      </div>
+
+      <SimulatorControls onReadingSent={fetchData} />
+    </main>
   );
 }
