@@ -3,6 +3,7 @@ import { Geist, Geist_Mono, Montserrat } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 import { Toaster } from '@/components/ui/sonner';
+import { Nav } from '@/components/nav';
 
 const montserrat = Montserrat({subsets:['latin'],variable:'--font-sans'});
 
@@ -28,7 +29,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={cn(geistSans.variable, geistMono.variable, "font-sans", montserrat.variable)}>
-      <body>{children}<Toaster /></body>
+      <body><Nav />{children}<Toaster /></body>
     </html>
   );
 }
