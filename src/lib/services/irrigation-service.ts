@@ -4,7 +4,7 @@ import { Reading, Settings, PumpStatus } from '../types';
 
 const DEFAULT_SETTINGS: Settings = {
   threshold: 40,
-  intervalMin: 5,
+  intervalMin: 30,
   pumpSec: 5,
 };
 

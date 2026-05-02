@@ -4,15 +4,18 @@ import { useState, useEffect, useCallback } from 'react';
 import { MoistureGauge } from '@/components/moisture-gauge';
 import { SimulatorControls } from '@/components/simulator-controls';
 import { PumpCard } from '@/components/pump-card';
+import { Button } from '@/components/ui/button';
 import { LatestReading } from '@/lib/types';
 import { toast } from 'sonner';
 
 export default function DashboardPage() {
   const [data, setData] = useState<LatestReading | null>(null);
   const [settings, setSettings] = useState<{ threshold: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
+      setError(null);
       const [latestRes, settingsRes] = await Promise.all([
         fetch('/api/latest'),
         fetch('/api/settings'),
@@ -23,8 +26,11 @@ export default function DashboardPage() {
         const sett = await settingsRes.json();
         setData(latest);
         setSettings(sett);
+      } else {
+        setError('Unable to load dashboard data. Please try again.');
       }
     } catch (err) {
+      setError('Unable to load dashboard data. Please try again.');
       console.error('Failed to fetch dashboard data:', err);
     }
   }, []);
@@ -47,6 +53,15 @@ export default function DashboardPage() {
   return (
     <main className="container mx-auto px-4 py-8 max-w-4xl">
       <h1 className="text-3xl font-bold mb-8">Irrigation Dashboard</h1>
+
+      {error && (
+        <div className="p-4 border border-red-200 bg-red-50 rounded-lg text-red-800 mb-4">
+          <p>{error}</p>
+          <Button onClick={fetchData} variant="outline" className="mt-2">
+            Retry
+          </Button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
         <MoistureGauge
