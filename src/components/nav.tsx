@@ -63,24 +63,31 @@ export function Nav() {
               </svg>
             </Button>
           </SheetTrigger>
-          <SheetContent side="right">
-            <nav className="flex flex-col gap-4 mt-8">
-              {navItems.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={() => setOpen(false)}
-                  className={cn(
-                    'text-lg transition-colors hover:text-primary',
-                    pathname === item.href
-                      ? 'text-primary font-medium'
-                      : 'text-muted-foreground'
-                  )}
-                >
-                  {item.label}
-                </Link>
-              ))}
-            </nav>
+          <SheetContent side="right" className="w-[280px] p-0">
+            <div className="flex flex-col h-full">
+              <div className="px-6 pt-6 pb-5 border-b border-border">
+                <p className="font-bold text-base">PumpTrack</p>
+                <p className="text-xs text-muted-foreground mt-0.5">IoT Irrigation Monitor</p>
+              </div>
+              <nav className="flex flex-col px-3 pt-4 pb-6 gap-1">
+                {navItems.map((item) => (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={() => setOpen(false)}
+                    className={cn(
+                      'flex items-center gap-3 px-4 py-3 rounded-lg text-[15px] transition-all duration-150',
+                      'hover:scale-[1.02] hover:bg-accent',
+                      pathname === item.href
+                        ? 'bg-primary/10 text-primary font-medium border-l-2 border-primary pl-[14px]'
+                        : 'text-muted-foreground'
+                    )}
+                  >
+                    {item.label}
+                  </Link>
+                ))}
+              </nav>
+            </div>
           </SheetContent>
         </Sheet>
       </div>

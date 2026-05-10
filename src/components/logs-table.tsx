@@ -34,6 +34,7 @@ export function LogsTable({ readings }: LogsTableProps) {
             <TableRow key={reading.id}>
               <TableCell>
                 {new Date(reading.created_at).toLocaleString('en-US', {
+                  timeZone: 'Asia/Manila',
                   year: 'numeric',
                   month: 'short',
                   day: 'numeric',

@@ -1,6 +1,7 @@
 'use client';
 
 import { cn } from '@/lib/utils';
+import { formatTimeAgo } from '@/lib/time-ago';
 
 interface MoistureGaugeProps {
   moisture: number | null;
@@ -59,7 +60,7 @@ export function MoistureGauge({ moisture, threshold, lastSeenMinutes }: Moisture
 
       {isStale && lastSeenMinutes !== null && (
         <div className="text-sm text-yellow-600 bg-yellow-50 px-3 py-1 rounded-full">
-          Last seen {Math.floor(lastSeenMinutes)} min ago
+          Last seen {formatTimeAgo(lastSeenMinutes)}
         </div>
       )}
 
