@@ -16,13 +16,26 @@ CREATE TABLE readings (
 );
 ```
 
-### Vercel KV — Keys Reference
+### `app_settings` (singleton configuration)
 
-| Key | Operation | Shape | TTL |
-|-----|-----------|-------|-----|
-| `settings` | `hset` / `hgetall` | `{ threshold: number, intervalMin: number, pumpSec: number }` | None |
-| `latest` | `hset` / `hgetall` | `{ moisture: number, ts: number }` | None |
-| `pump_command` | `set` / `get` / `del` | `'true'` | 300 seconds |
+| Column | Type | Constraints | Default |
+|--------|------|-------------|---------|
+| id | integer | PRIMARY KEY, CHECK (id = 1) | 1 |
+| threshold | integer | CHECK (0..100) | 40 |
+| interval_min | integer | CHECK (1..30) | 5 |
+| pump_sec | integer | CHECK (1..60) | 5 |
+| command_poll_sec | integer | CHECK (5..300) | 30 |
+| updated_at | timestamptz | | now() |
+
+### `app_state` (singleton runtime state)
+
+| Column | Type | Constraints | Default |
+|--------|------|-------------|---------|
+| id | integer | PRIMARY KEY, CHECK (id = 1) | 1 |
+| pump_status | text | CHECK ('idle' | 'pending' | 'running' | 'error') | 'idle' |
+| pump_command | text | nullable | null |
+| pump_command_expires_at | timestamptz | nullable | null |
+| updated_at | timestamptz | | now() |
 
 ### Default Settings Values
 
@@ -31,6 +44,7 @@ CREATE TABLE readings (
 | `threshold` | 40 | 0 | 100 |
 | `intervalMin` | 5 | 1 | 30 |
 | `pumpSec` | 5 | 1 | 60 |
+| `commandPollSec` | 30 | 5 | 300 |
 
 ---
 
@@ -63,11 +77,11 @@ x-api-key: <ARDUINO_API_KEY>
 **Logic:**
 1. Validate API key → 401 if invalid
 2. Validate moisture is a number 0–100 → 400 if invalid
-3. Fetch `settings` from KV
+3. Fetch `settings` from `app_settings`
 4. Determine `shouldPump = moisture < settings.threshold`
 5. Insert row into `readings` table with `pump_fired = shouldPump`, `trigger = 'auto'`
-6. Update `latest` hash in KV: `{ moisture, ts: Date.now() }`
-7. If `shouldPump`, set `pump_command = 'true'` in KV with 300s TTL
+6. Update `latest` reading in `readings` table
+7. If `shouldPump`, set `pump_command` and `pump_command_expires_at` in `app_state`
 8. Return 200
 
 **Response 200:**
@@ -98,8 +112,8 @@ x-api-key: <ARDUINO_API_KEY>
 
 **Logic:**
 1. Validate API key → 401 if invalid
-2. Check `pump_command` in KV
-3. If `'true'`: delete the key, return `{ pump: true }`
+2. Check `pump_command` in `app_state`
+3. If present and not expired: clear `pump_command`, return `{ pump: true }`
 4. Else: return `{ pump: false }`
 
 **Response 200:**
@@ -122,8 +136,8 @@ or
 **Request body:** none required
 
 **Logic:**
-1. Set `pump_command = 'true'` in KV with 300s TTL
-2. Fetch `latest` from KV to get current moisture
+1. Set `pump_command` and `pump_command_expires_at` in `app_state`
+2. Query latest row from `readings` table to get current moisture
 3. Insert row into `readings` with `pump_fired = true`, `trigger = 'manual'`
 4. Return 200
 
@@ -139,8 +153,8 @@ or
 **Caller:** Dashboard (polls every 30 seconds)
 
 **Logic:**
-1. Fetch `latest` hash from KV
-2. Return values or nulls if not set
+1. Query latest row from `readings` table
+2. Return values or nulls if no rows exist
 
 **Response 200:**
 ```json
@@ -184,7 +198,7 @@ or when no data yet:
 **Caller:** Arduino (on startup) + Dashboard `/settings` page
 
 **Logic:**
-1. Fetch `settings` hash from KV
+1. Fetch row from `app_settings`
 2. Return with defaults if keys are missing
 
 **Response 200:**
@@ -192,7 +206,8 @@ or when no data yet:
 {
   "threshold": 40,
   "intervalMin": 5,
-  "pumpSec": 5
+  "pumpSec": 5,
+  "commandPollSec": 30
 }
 ```
 
@@ -207,18 +222,19 @@ or when no data yet:
 {
   "threshold": 35,
   "intervalMin": 10,
-  "pumpSec": 8
+  "pumpSec": 8,
+  "commandPollSec": 60
 }
 ```
 
 **Logic:**
 1. Parse and clamp each value to its valid range
-2. Save to KV `settings` hash
+2. Upsert row in `app_settings`
 3. Return saved values
 
 **Response 200:**
 ```json
-{ "ok": true, "saved": { "threshold": 35, "intervalMin": 10, "pumpSec": 8 } }
+{ "ok": true, "saved": { "threshold": 35, "intervalMin": 10, "pumpSec": 8, "commandPollSec": 60 } }
 ```
 
 **Response 400:**
@@ -264,4 +280,5 @@ Manual trigger from dashboard:
 | `threshold` | integer | 0 ≤ n ≤ 100 |
 | `intervalMin` | integer | 1 ≤ n ≤ 30 |
 | `pumpSec` | integer | 1 ≤ n ≤ 60 |
+| `commandPollSec` | integer | 5 ≤ n ≤ 300 |
 | `trigger` | string | `'auto'` or `'manual'` |

@@ -14,9 +14,10 @@ export interface LatestReading {
 }
 
 export interface Settings {
-  threshold: number;
-  intervalMin: number;
-  pumpSec: number;
+  threshold: number;      // 0-100, default 40
+  intervalMin: number;    // 1-30, default 5
+  pumpSec: number;        // 1-60, default 5
+  commandPollSec: number; // 5-300, default 30
 }
 
 export interface PumpCommand {
