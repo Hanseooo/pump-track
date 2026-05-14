@@ -17,6 +17,7 @@ export function SettingsForm({ initialSettings }: SettingsFormProps) {
     threshold: 40,
     intervalMin: 5,
     pumpSec: 5,
+    commandPollSec: 30,
   });
   const [loading, setLoading] = useState(false);
 

@@ -15,6 +15,8 @@ export async function POST(request: NextRequest) {
     const intervalMin = parseInt(body.intervalMin, 10);
     const pumpSec = parseInt(body.pumpSec, 10);
 
+    const commandPollSec = parseInt(body.commandPollSec, 10) || 30;
+
     if (isNaN(threshold) || isNaN(intervalMin) || isNaN(pumpSec)) {
       return NextResponse.json(
         { error: 'Invalid settings values' },
@@ -22,7 +24,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const settings: Settings = { threshold, intervalMin, pumpSec };
+    const settings: Settings = { threshold, intervalMin, pumpSec, commandPollSec };
     const saved = await saveSettings(settings);
     return NextResponse.json({ ok: true, saved });
   } catch (error) {

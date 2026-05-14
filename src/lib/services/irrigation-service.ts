@@ -1,72 +1,78 @@
-import { redis } from '../redis';
-import { insertReading, getLastPumpReading } from '../supabase';
-import { Reading, Settings, PumpStatus } from '../types';
+import {
+  getSettings as getSettingsFromDb,
+  saveSettings as saveSettingsToDb,
+  getLatestReading,
+  getLastPumpReading,
+  insertReading,
+  getAppState,
+  setPumpStatusInDb,
+  setPumpCommandInDb,
+  deletePumpCommandInDb,
+  setPumpCommandExpiredInDb,
+} from '@/lib/supabase';
+import { Reading, Settings, PumpStatus } from '@/lib/types';
 
 const DEFAULT_SETTINGS: Settings = {
   threshold: 40,
-  intervalMin: 30,
+  intervalMin: 5,
   pumpSec: 5,
+  commandPollSec: 30,
 };
 
 export async function getSettings(): Promise<Settings> {
-  const settings = await redis.hgetall<Record<string, string>>('settings');
-  if (!settings || Object.keys(settings).length === 0) {
+  try {
+    return await getSettingsFromDb();
+  } catch {
     return DEFAULT_SETTINGS;
   }
-  return {
-    threshold: parseInt(settings.threshold) || DEFAULT_SETTINGS.threshold,
-    intervalMin: parseInt(settings.intervalMin) || DEFAULT_SETTINGS.intervalMin,
-    pumpSec: parseInt(settings.pumpSec) || DEFAULT_SETTINGS.pumpSec,
-  };
 }
 
 export async function saveSettings(settings: Settings): Promise<Settings> {
-  const clamped = {
-    threshold: Math.max(0, Math.min(100, settings.threshold)),
-    intervalMin: Math.max(1, Math.min(30, settings.intervalMin)),
-    pumpSec: Math.max(1, Math.min(60, settings.pumpSec)),
-  };
-  await redis.hset('settings', clamped);
-  return clamped;
-}
-
-export async function getLatestFromRedis(): Promise<{ moisture: number | null; ts: number | null }> {
-  const latest = await redis.hgetall<Record<string, string>>('latest');
-  if (!latest || Object.keys(latest).length === 0) {
-    return { moisture: null, ts: null };
-  }
-  return {
-    moisture: latest.moisture ? parseInt(latest.moisture) : null,
-    ts: latest.ts ? parseInt(latest.ts) : null,
-  };
-}
-
-export async function updateLatest(moisture: number): Promise<void> {
-  await redis.hset('latest', {
-    moisture: moisture.toString(),
-    ts: Date.now().toString(),
-  });
+  return saveSettingsToDb(settings);
 }
 
 export async function getPumpStatus(): Promise<PumpStatus> {
-  const status = await redis.get<string>('pump_status');
-  return (status as PumpStatus) || 'idle';
+  const state = await getAppState();
+
+  // Check expiry
+  if (state.pumpCommand && state.pumpCommandExpiresAt) {
+    const expires = new Date(state.pumpCommandExpiresAt).getTime();
+    if (Date.now() > expires) {
+      await setPumpCommandExpiredInDb();
+      return 'error';
+  }
+  }
+
+  return (state.pumpStatus as PumpStatus) || 'idle';
 }
 
 export async function setPumpStatus(status: PumpStatus): Promise<void> {
-  await redis.set('pump_status', status);
+  await setPumpStatusInDb(status);
 }
 
 export async function getPumpCommand(): Promise<string | null> {
-  return redis.get<string>('pump_command');
+  const state = await getAppState();
+
+  if (!state.pumpCommand) return null;
+
+  // Check expiry
+  if (state.pumpCommandExpiresAt) {
+    const expires = new Date(state.pumpCommandExpiresAt).getTime();
+    if (Date.now() > expires) {
+      await setPumpCommandExpiredInDb();
+      return null;
+    }
+  }
+
+  return state.pumpCommand;
 }
 
 export async function setPumpCommand(): Promise<void> {
-  await redis.set('pump_command', 'true', { ex: 300 });
+  await setPumpCommandInDb();
 }
 
 export async function deletePumpCommand(): Promise<void> {
-  await redis.del('pump_command');
+  await deletePumpCommandInDb();
 }
 
 export async function recordReading(
@@ -82,31 +88,28 @@ export async function recordReading(
     trigger: 'auto',
   });
 
-  await updateLatest(moisture);
-
   if (shouldPump && !options.simulate) {
-    await setPumpCommand();
+    await setPumpCommandInDb();
+    await setPumpStatusInDb('pending');
   }
 
   const currentStatus = await getPumpStatus();
   if (currentStatus === 'running') {
-    await setPumpStatus('idle');
+    await setPumpStatusInDb('idle');
   }
 
   return { shouldPump, reading };
 }
 
 export async function triggerManualPump(): Promise<void> {
-  const latest = await getLatestFromRedis();
-  if (latest.moisture === null) {
-    throw new Error('No moisture reading available. Wait for first reading.');
-  }
+  const latest = await getLatestReading();
+  const moisture = latest?.moisture ?? 50;
 
-  await setPumpCommand();
-  await setPumpStatus('pending');
+  await setPumpCommandInDb();
+  await setPumpStatusInDb('pending');
 
   await insertReading({
-    moisture: latest.moisture,
+    moisture,
     pump_fired: true,
     trigger: 'manual',
   });
@@ -119,24 +122,15 @@ export async function getDashboardData(): Promise<{
   lastPump: { ts: number; trigger: 'auto' | 'manual' } | null;
 }> {
   const [latest, pumpStatus, lastPump] = await Promise.all([
-    getLatestFromRedis(),
+    getLatestReading(),
     getPumpStatus(),
     getLastPumpReading(),
   ]);
 
-  let effectiveStatus = pumpStatus;
-  if (pumpStatus === 'pending') {
-    const command = await getPumpCommand();
-    if (!command) {
-      effectiveStatus = 'error';
-      await setPumpStatus('error');
-    }
-  }
-
   return {
-    moisture: latest.moisture,
-    ts: latest.ts,
-    pumpStatus: effectiveStatus,
+    moisture: latest?.moisture ?? null,
+    ts: latest ? new Date(latest.created_at).getTime() : null,
+    pumpStatus,
     lastPump: lastPump
       ? { ts: new Date(lastPump.created_at).getTime(), trigger: lastPump.trigger }
       : null,
