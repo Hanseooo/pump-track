@@ -4,6 +4,8 @@
 > See SCHEMA.md for full API specification and data shapes.
 > See SETUP.md for project creation and environment variable setup.
 
+All API routes are **thin controllers** that delegate business logic to `src/lib/services/irrigation-service.ts`.
+
 ---
 
 ## Supabase Client
@@ -24,6 +26,26 @@ export const supabase = createClient(
 
 ---
 
+## Supabase Helpers
+
+File: `src/lib/supabase.ts`
+
+The Supabase client provides helper functions for all database operations:
+
+- `getLatestReading()` — returns the most recent reading row
+- `getLastPumpReading()` — returns the most recent reading where `pump_fired = true`
+- `getReadings(page, limit)` — paginated readings
+- `insertReading(reading)` — inserts a new reading
+- `getSettings()` — fetches singleton row from `app_settings`
+- `saveSettings(settings)` — upserts singleton row in `app_settings`
+- `getAppState()` — fetches singleton row from `app_state`
+- `setPumpStatusInDb(status)` — updates `pump_status` in `app_state`
+- `setPumpCommandInDb()` — sets `pump_command = 'true'` with 5min expiry in `app_state`
+- `deletePumpCommandInDb()` — clears `pump_command` in `app_state`
+- `setPumpCommandExpiredInDb()` — clears expired command in `app_state`
+
+---
+
 ## Auth Helper
 
 File: `src/lib/auth.ts`
@@ -41,40 +63,26 @@ export function validateApiKey(req: Request): boolean {
 ### `src/app/api/reading/route.ts`
 
 ```typescript
-import { NextRequest } from 'next/server'
-import { kv } from '@upstash/redis'
-import { supabase } from '@/lib/supabase'
-import { validateApiKey } from '@/lib/auth'
-import type { Settings } from '@/lib/types'
+import { NextRequest, NextResponse } from 'next/server'
+import { validateApiKey, unauthorizedResponse } from '@/lib/auth'
+import { recordReading } from '@/lib/services/irrigation-service'
 
-export async function POST(req: NextRequest) {
-  if (!validateApiKey(req))
-    return Response.json({ error: 'Unauthorized' }, { status: 401 })
+export async function POST(request: NextRequest) {
+  if (!validateApiKey(request)) return unauthorizedResponse()
 
-  const body = await req.json()
-  const moisture = parseInt(body.moisture)
+  try {
+    const body = await request.json()
+    const moisture = parseInt(body.moisture)
 
-  if (isNaN(moisture) || moisture < 0 || moisture > 100)
-    return Response.json({ error: 'Invalid moisture value' }, { status: 400 })
+    if (isNaN(moisture) || moisture < 0 || moisture > 100)
+      return NextResponse.json({ error: 'Invalid moisture value. Must be 0-100.' }, { status: 400 })
 
-  const raw = await kv.hgetall<Settings>('settings')
-  const threshold = raw?.threshold ?? 40
-
-  const shouldPump = moisture < threshold
-
-  await supabase.from('readings').insert({
-    moisture,
-    pump_fired: shouldPump,
-    trigger: 'auto',
-  })
-
-  await kv.hset('latest', { moisture, ts: Date.now() })
-
-  if (shouldPump) {
-    await kv.set('pump_command', 'true', { ex: 300 })
+    const { shouldPump } = await recordReading(moisture)
+    return NextResponse.json({ ok: true, shouldPump })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
-
-  return Response.json({ ok: true, shouldPump })
 }
 ```
 
@@ -83,22 +91,27 @@ export async function POST(req: NextRequest) {
 ### `src/app/api/command/route.ts`
 
 ```typescript
-import { NextRequest } from 'next/server'
-import { kv } from '@upstash/redis'
-import { validateApiKey } from '@/lib/auth'
+import { NextRequest, NextResponse } from 'next/server'
+import { validateApiKey, unauthorizedResponse } from '@/lib/auth'
+import { getPumpCommand, deletePumpCommand, setPumpStatus } from '@/lib/services/irrigation-service'
 
-export async function GET(req: NextRequest) {
-  if (!validateApiKey(req))
-    return Response.json({ error: 'Unauthorized' }, { status: 401 })
+export async function GET(request: NextRequest) {
+  if (!validateApiKey(request)) return unauthorizedResponse()
 
-  const command = await kv.get<string>('pump_command')
+  try {
+    const command = await getPumpCommand()
 
-  if (command === 'true') {
-    await kv.del('pump_command')
-    return Response.json({ pump: true })
+    if (command) {
+      await deletePumpCommand()
+      await setPumpStatus('running')
+      return NextResponse.json({ pump: true })
+    }
+
+    return NextResponse.json({ pump: false })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
-
-  return Response.json({ pump: false })
 }
 ```
 
@@ -107,22 +120,17 @@ export async function GET(req: NextRequest) {
 ### `src/app/api/pump/route.ts`
 
 ```typescript
-import { kv } from '@upstash/redis'
-import { supabase } from '@/lib/supabase'
-import type { LatestReading } from '@/lib/types'
+import { NextResponse } from 'next/server'
+import { triggerManualPump } from '@/lib/services/irrigation-service'
 
 export async function POST() {
-  await kv.set('pump_command', 'true', { ex: 300 })
-
-  const latest = await kv.hgetall<LatestReading>('latest')
-
-  await supabase.from('readings').insert({
-    moisture: latest?.moisture ?? null,
-    pump_fired: true,
-    trigger: 'manual',
-  })
-
-  return Response.json({ ok: true })
+  try {
+    await triggerManualPump()
+    return NextResponse.json({ ok: true })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    return NextResponse.json({ error: message }, { status: 400 })
+  }
 }
 ```
 
@@ -131,12 +139,12 @@ export async function POST() {
 ### `src/app/api/latest/route.ts`
 
 ```typescript
-import { kv } from '@upstash/redis'
-import type { LatestReading } from '@/lib/types'
+import { NextResponse } from 'next/server'
+import { getDashboardData } from '@/lib/services/irrigation-service'
 
 export async function GET() {
-  const latest = await kv.hgetall<LatestReading>('latest')
-  return Response.json(latest ?? { moisture: null, ts: null })
+  const data = await getDashboardData()
+  return NextResponse.json(data)
 }
 ```
 
@@ -145,22 +153,20 @@ export async function GET() {
 ### `src/app/api/logs/route.ts`
 
 ```typescript
-import { NextRequest } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { NextRequest, NextResponse } from 'next/server'
+import { getReadings } from '@/lib/services/irrigation-service'
 
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url)
+export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url)
   const limit = Math.min(parseInt(searchParams.get('limit') ?? '100'), 500)
 
-  const { data, error } = await supabase
-    .from('readings')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(limit)
-
-  if (error) return Response.json({ error: error.message }, { status: 500 })
-
-  return Response.json(data ?? [])
+  try {
+    const data = await getReadings(1, limit)
+    return NextResponse.json(data)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
 }
 ```
 
@@ -169,35 +175,39 @@ export async function GET(req: NextRequest) {
 ### `src/app/api/settings/route.ts`
 
 ```typescript
-import { NextRequest } from 'next/server'
-import { kv } from '@upstash/redis'
-import type { Settings } from '@/lib/types'
-
-const DEFAULTS: Settings = { threshold: 40, intervalMin: 5, pumpSec: 5 }
+import { NextRequest, NextResponse } from 'next/server'
+import { getSettings, saveSettings } from '@/lib/services/irrigation-service'
+import { Settings } from '@/lib/types'
 
 export async function GET() {
-  const raw = await kv.hgetall<Settings>('settings')
-  return Response.json({
-    threshold:   raw?.threshold   ?? DEFAULTS.threshold,
-    intervalMin: raw?.intervalMin ?? DEFAULTS.intervalMin,
-    pumpSec:     raw?.pumpSec     ?? DEFAULTS.pumpSec,
-  })
+  const settings = await getSettings()
+  return NextResponse.json(settings)
 }
 
-export async function POST(req: NextRequest) {
-  const body = await req.json()
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json()
 
-  const threshold   = Math.max(0,  Math.min(100, parseInt(body.threshold   ?? DEFAULTS.threshold)))
-  const intervalMin = Math.max(1,  Math.min(30,  parseInt(body.intervalMin ?? DEFAULTS.intervalMin)))
-  const pumpSec     = Math.max(1,  Math.min(60,  parseInt(body.pumpSec     ?? DEFAULTS.pumpSec)))
+    const threshold = parseInt(body.threshold, 10)
+    const intervalMin = parseInt(body.intervalMin, 10)
+    const pumpSec = parseInt(body.pumpSec, 10)
+    const commandPollSec = parseInt(body.commandPollSec, 10) || 30
 
-  if (isNaN(threshold) || isNaN(intervalMin) || isNaN(pumpSec))
-    return Response.json({ error: 'Invalid settings values' }, { status: 400 })
+    if (isNaN(threshold) || isNaN(intervalMin) || isNaN(pumpSec))
+      return NextResponse.json({ error: 'Invalid settings values' }, { status: 400 })
 
-  const saved: Settings = { threshold, intervalMin, pumpSec }
-  await kv.hset('settings', saved)
+    const settings: Settings = { threshold, intervalMin, pumpSec, commandPollSec }
+    const saved = await saveSettings(settings)
+    return NextResponse.json({ ok: true, saved })
+  } catch (error) {
+    console.error('POST /api/settings error:', error)
 
-  return Response.json({ ok: true, saved })
+    if (error instanceof SyntaxError)
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
 }
 ```
 
@@ -222,7 +232,7 @@ try {
 
 ```bash
 # Start dev server
-npm run dev
+pnpm dev
 
 # POST a reading (simulates Arduino)
 curl -X POST http://localhost:3000/api/reading \

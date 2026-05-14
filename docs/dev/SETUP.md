@@ -1,14 +1,13 @@
 # Project Setup Guide
-## irrigation-dashboard — Next.js 16 + Supabase + Upstash Redis
+## irrigation-dashboard — Next.js 16 + Supabase
 
 ---
 
 ## Prerequisites
 
 - Node.js 20+
-- npm / pnpm / bun
+- pnpm
 - A Supabase account (supabase.com)
-- A Vercel account (vercel.com)
 - A GitHub account (for Vercel deployment)
 
 ---
@@ -33,8 +32,7 @@ When prompted, select **Yes** to use the App Router.
 ## 2. Install Dependencies
 
 ```bash
-npm install @upstash/redis @supabase/supabase-js
-npm install -D @types/node
+pnpm install @supabase/supabase-js
 npx shadcn@latest init
 ```
 
@@ -63,6 +61,33 @@ CREATE TABLE readings (
   trigger     TEXT DEFAULT 'auto',
   created_at  TIMESTAMPTZ DEFAULT now()
 );
+
+-- Singleton settings table
+CREATE TABLE IF NOT EXISTS app_settings (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  threshold INTEGER NOT NULL DEFAULT 40 CHECK (threshold BETWEEN 0 AND 100),
+  interval_min INTEGER NOT NULL DEFAULT 5 CHECK (interval_min BETWEEN 1 AND 30),
+  pump_sec INTEGER NOT NULL DEFAULT 5 CHECK (pump_sec BETWEEN 1 AND 60),
+  command_poll_sec INTEGER NOT NULL DEFAULT 30 CHECK (command_poll_sec BETWEEN 5 AND 300),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+INSERT INTO app_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- Singleton state table
+CREATE TABLE IF NOT EXISTS app_state (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  pump_status TEXT DEFAULT 'idle' CHECK (pump_status IN ('idle', 'pending', 'running', 'error')),
+  pump_command TEXT,
+  pump_command_expires_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+INSERT INTO app_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- Enable Realtime
+ALTER PUBLICATION supabase_realtime ADD TABLE app_state;
+ALTER PUBLICATION supabase_realtime ADD TABLE readings;
 ```
 
 3. Go to **Project Settings → API** and copy:
@@ -71,18 +96,7 @@ CREATE TABLE readings (
 
 ---
 
-## 4. Upstash Redis Setup
-
-1. Push your repo to GitHub
-2. Import at [vercel.com/new](https://vercel.com/new)
-3. In Vercel dashboard → **Storage → Create → Connect Redis** (Upstash)
-4. Name it `irrigation-kv` and connect to your project
-5. Vercel auto-injects `KV_REST_API_URL` and `KV_REST_API_TOKEN`
-   *Note: Vercel KV was deprecated — now using Upstash Redis directly.*
-
----
-
-## 5. Environment Variables
+## 4. Environment Variables
 
 Create `.env.local` in the project root:
 
@@ -93,10 +107,6 @@ SUPABASE_ANON_KEY=your_supabase_anon_key
 
 # Arduino auth (generate any random string)
 ARDUINO_API_KEY=your_secret_key_here
-
-# Upstash Redis (auto-filled after connecting Redis in Vercel dashboard)
-KV_REST_API_URL=
-KV_REST_API_TOKEN=
 ```
 
 > **Never commit `.env.local` to Git.** Ensure `.env.local` is in `.gitignore`.
@@ -110,7 +120,7 @@ Also add all variables to **Vercel dashboard → Settings → Environment Variab
 
 ---
 
-## 6. Folder Structure
+## 5. Folder Structure
 
 ```
 irrigation-dashboard/
@@ -136,8 +146,11 @@ irrigation-dashboard/
 │   │       └── settings/
 │   │           └── route.ts        ← GET + POST /api/settings
 │   ├── lib/
-│   │   ├── supabase.ts             ← Supabase client singleton
-│   │   └── kv.ts                   ← KV helper types
+│   │   ├── supabase.ts             ← Supabase client + helpers
+│   │   ├── types.ts                ← TypeScript types
+│   │   ├── auth.ts                 ← API key validation
+│   │   └── services/
+│   │       └── irrigation-service.ts ← Business logic layer
 │   └── components/
 │       ├── moisture-gauge.tsx      ← Moisture % display + progress bar
 │       ├── pump-card.tsx           ← Pump status + water now button
@@ -151,7 +164,7 @@ irrigation-dashboard/
 
 ---
 
-## 7. Supabase Client (`src/lib/supabase.ts`)
+## 6. Supabase Client (`src/lib/supabase.ts`)
 
 ```typescript
 import { createClient } from '@supabase/supabase-js'
@@ -167,7 +180,7 @@ export const supabase = createClient(
 
 ---
 
-## 8. TypeScript Types (`src/lib/types.ts`)
+## 7. TypeScript Types (`src/lib/types.ts`)
 
 ```typescript
 export type Reading = {
@@ -179,9 +192,10 @@ export type Reading = {
 }
 
 export type Settings = {
-  threshold: number    // 0-100, default 40
-  intervalMin: number  // 1-30, default 5
-  pumpSec: number      // 1-60, default 5
+  threshold: number       // 0-100, default 40
+  intervalMin: number     // 1-30, default 5
+  pumpSec: number         // 1-60, default 5
+  commandPollSec: number  // 5-300, default 30
 }
 
 export type LatestReading = {
@@ -192,10 +206,10 @@ export type LatestReading = {
 
 ---
 
-## 9. Local Development
+## 8. Local Development
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 App runs at `http://localhost:3000`.
@@ -215,7 +229,7 @@ curl http://localhost:3000/api/command \
 
 ---
 
-## 10. Deploy to Vercel
+## 9. Deploy to Vercel
 
 ```bash
 git add .
@@ -234,5 +248,5 @@ Use this URL as `API_HOST` in the Arduino `secrets.h` file (without `https://`).
 
 - **No `middleware.ts`** — Next.js 16 replaced it with `proxy.ts`. This project does not need either.
 - **Caching is opt-in** — API routes run dynamically by default. No extra config needed.
-- **Turbopack is default** — `npm run dev` uses Turbopack automatically. No config needed.
+- **Turbopack is default** — `pnpm dev` uses Turbopack automatically. No config needed.
 - **App Router only** — Do not create a `pages/` directory.
