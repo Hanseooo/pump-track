@@ -99,6 +99,24 @@ export function SettingsForm({ initialSettings }: SettingsFormProps) {
         />
       </div>
 
+      <div className="space-y-2">
+        <Label htmlFor="commandPollSec">Command Poll Interval (seconds)</Label>
+        <Input
+          id="commandPollSec"
+          type="number"
+          min={5}
+          max={300}
+          value={settings.commandPollSec}
+          onChange={(e) => {
+            const val = parseInt(e.target.value, 10);
+            setSettings((s) => ({ ...s, commandPollSec: isNaN(val) ? s.commandPollSec : val }));
+          }}
+        />
+        <p className="text-sm text-muted-foreground">
+          How often Arduino checks for manual pump triggers (5–300 sec).
+        </p>
+      </div>
+
       <Button type="submit" disabled={loading}>
         {loading ? 'Saving...' : 'Save Settings'}
       </Button>
