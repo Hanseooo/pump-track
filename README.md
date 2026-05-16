@@ -89,7 +89,7 @@ Vercel auto-deploys on every push to `main`. Connect Upstash Redis and Supabase 
 
 The Arduino UNO R4 WiFi firmware is maintained separately:
 
-> **[arduino-firmware-url]** — source code + wiring diagram
+> **https://github.com/Hanseooo?tab=repositories** — source code + wiring diagram
 
 Flash `secrets.example.h` → `secrets.h` with your values:
 
